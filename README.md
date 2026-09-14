@@ -1,7 +1,7 @@
 # Semantic TraceGraph
 
 **Authors:** [Xinyi Wang](https://github.com/cindyxinyiwang) and collaborator  
-**Project page:** https://cindyxinyiwang.github.io/semantic-tracegraph/
+**Project page:** https://semantic-tracegraph.github.io/semantic-tracegraph/
 
 A research prototype for turning coding-agent transcripts into evidence-grounded
 semantic accomplishment graphs. It separates three questions that are often
