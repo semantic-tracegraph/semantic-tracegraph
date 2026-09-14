@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Semantic TraceGraph</title>
+  <meta name="description" content="Evidence-grounded semantic accomplishment graphs for coding-agent traces.">
+  <style>
+    :root {
+      --ink: #1c1917;
+      --muted: #57534e;
+      --rule: #d6d3d1;
+      --paper: #faf8f5;
+      --link: #1d4ed8;
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--paper); color: var(--ink); }
+    body {
+      margin: 0;
+      font: 18px/1.55 "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
+    }
+    main {
+      max-width: 42rem;
+      margin: 0 auto;
+      padding: 3.5rem 1.25rem 5rem;
+    }
+    header { margin-bottom: 2.25rem; }
+    p.kicker {
+      margin: 0 0 0.5rem;
+      font: 0.72rem/1.3 ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 2rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+    p.authors { margin: 0 0 0.35rem; }
+    p.meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    a { color: var(--link); }
+    h2 {
+      margin: 2.1rem 0 0.6rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    p, li { color: #292524; }
+    ul { padding-left: 1.2rem; }
+    li { margin: 0.35rem 0; }
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      margin: 1.25rem 0 0;
+      padding: 0;
+      list-style: none;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: 0.95rem;
+    }
+    footer {
+      margin-top: 2.75rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="kicker">Research prototype</p>
+      <h1>Semantic TraceGraph</h1>
+      <p class="authors">
+        <a href="https://github.com/cindyxinyiwang">Xinyi Wang</a>
+        and collaborator
+      </p>
+      <p class="meta">2026 &middot; code and notes in progress</p>
+      <ul class="links">
+        <li><a href="https://github.com/cindyxinyiwang/semantic-tracegraph">Code on GitHub</a></li>
+        <li><a href="https://github.com/cindyxinyiwang/semantic-tracegraph/blob/main/README.md">Prototype README</a></li>
+      </ul>
+    </header>
+
+    <h2>What this is</h2>
+    <p>
+      Coding agents produce long transcripts. Scoring those traces with a single
+      success bit collapses three different questions: what the agent claimed,
+      what the trajectory actually shows, and which claims have mechanical proof
+      (a test, a patch, a reproduction).
+    </p>
+    <p>
+      Semantic TraceGraph turns a transcript into a small evidence-grounded
+      accomplishment graph. Nodes are coarse, non-overlapping claims
+      (localization, diagnosis, reproduction, implementation, verification,
+      handoff). Edges record causal structure. A separate judge scores each node
+      as <em>claimed</em>, <em>evidenced</em>, or <em>verified</em> without
+      rewriting the graph.
+    </p>
+
+    <h2>How it works</h2>
+    <p>
+      Both the decomposer and the judge are tool-using LLM loops. The model sees
+      a trace summary and can inspect events through a read-only Python sandbox
+      (<code>trace.event</code>, <code>trace.grep</code>, coverage of uncited
+      spans, and so on). Invalid graphs and verdicts are rejected so the agent
+      can retry inside a step budget.
+    </p>
+    <p>
+      Evaluation treats graph progress as more than node count: semantic
+      duplicates are merged, invalidation and regressions are penalized, and
+      results are grouped by task ID so several model trajectories for the same
+      issue are not treated as independent samples.
+    </p>
+
+    <h2>Status</h2>
+    <p>
+      This is an early prototype with a working ingest, decompose, verify, and
+      evaluate pipeline on SWE-Router-style coding traces. Pilot numbers so far
+      are a pipeline smoke test, not evidence for the research claim. Human
+      agreement, execution-level checks, and a handoff continuation experiment
+      are still ahead of us.
+    </p>
+    <p>
+      Gold patches and hidden tests stay evaluation-only. A successful command
+      is evidence that something ran, not that the semantic claim is correct.
+    </p>
+
+    <h2>Using the prototype</h2>
+    <p>
+      Clone the repository, install with
+      <code>pip install -e '.[dev]'</code>, and set
+      <code>TRACEGRAPH_API_KEY</code>. The CLI entry point is
+      <code>tracegraph</code> (audit, sample, decompose, verify, evaluate).
+      Details are in the README.
+    </p>
+
+    <footer>
+      Both authors can link this page. To add the second name, edit
+      <code>docs/index.html</code> in the GitHub repository.
+    </footer>
+  </main>
+</body>
+</html>

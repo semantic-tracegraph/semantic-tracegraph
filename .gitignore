@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+.DS_Store
+.env
+.env.*
+
+# Pipeline outputs (nested json/jsonl too). Keep the small example traces.
+artifacts/**
+!artifacts/example_agent_traces_good.txt
+!artifacts/example_agent_traces_bad.txt
