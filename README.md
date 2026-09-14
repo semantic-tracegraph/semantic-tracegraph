@@ -1,6 +1,6 @@
 # Semantic TraceGraph
 
-**Authors:** [Xinyi Wang](https://github.com/cindyxinyiwang) and collaborator  
+**Authors:** [Xinyi Wang](https://github.com/cindyxinyiwang) and [Neil Xu](https://github.com/neilzxu)  
 **Project page:** https://semantic-tracegraph.github.io/semantic-tracegraph/
 
 A research prototype for turning coding-agent transcripts into evidence-grounded
