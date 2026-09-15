@@ -71,12 +71,35 @@
       color: var(--muted);
       font-size: 0.9rem;
     }
+    footer h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+      color: var(--ink);
+    }
+    footer p { margin: 0 0 0.75rem; }
+    footer cite {
+      display: block;
+      font-style: normal;
+      color: #292524;
+      line-height: 1.5;
+    }
+    footer pre {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      overflow-x: auto;
+      background: #f5f5f4;
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: #44403c;
+    }
   </style>
 </head>
 <body>
   <main>
     <header>
-      <p class="kicker">Research prototype</p>
       <h1>Semantic TraceGraph</h1>
       <p class="authors">
         <a href="https://github.com/cindyxinyiwang">Xinyi Wang</a>
@@ -92,46 +115,48 @@
 
     <h2>What this is</h2>
     <p>
-      Coding agents produce long transcripts. Scoring those traces with a single
-      success bit collapses three different questions: what the agent claimed,
-      what the trajectory actually shows, and which claims have mechanical proof
-      (a test, a patch, a reproduction).
+      Analyzing agent traces helps us understand their capabilities, failure modes, and
+      potential inefficiencies. Most agent evaluations use a final pass/fail outcome for
+      simplicity, but that outcome ignores useful intermediate work, especially in failed
+      trajectories. As agents take on more complex tasks, a single trajectory can contain
+      several task-relevant accomplishments. Measuring those accomplishments provides a
+      richer view of agent behavior and cost.
     </p>
     <p>
-      Semantic TraceGraph turns a transcript into a small evidence-grounded
-      accomplishment graph. Nodes are coarse, non-overlapping claims
-      (localization, diagnosis, reproduction, implementation, verification,
-      handoff). Edges record causal structure. A separate judge scores each node
-      as <em>claimed</em>, <em>evidenced</em>, or <em>verified</em> without
-      rewriting the graph.
+      Semantic TraceGraph turns an agent trace into a small, evidence-grounded task graph.
+      The graph is a directed acyclic graph (DAG) whose nodes represent accomplishments
+      supported by consecutive spans of the trace. In coding-agent traces, for example, a
+      localization node can cover the searches and code reading that identify the relevant
+      files and symbols. Edges capture causal relationships: an implementation node may
+      depend on a localization node because the edit requires the earlier codebase
+      understanding.
     </p>
 
     <h2>How it works</h2>
     <p>
-      Both the decomposer and the judge are tool-using LLM loops. The model sees
-      a trace summary and can inspect events through a read-only Python sandbox
-      (<code>trace.event</code>, <code>trace.grep</code>, coverage of uncited
-      spans, and so on). Invalid graphs and verdicts are rejected so the agent
-      can retry inside a step budget.
+      A lightweight decomposer agent constructs the graph from a trajectory. It can inspect
+      selected events through a read-only Python sandbox rather than loading the entire
+      trace into context. It then submits a candidate graph to a validator, which checks
+      structural requirements such as valid evidence references and causal edges. The
+      decomposer iterates within a fixed step budget until the graph is accepted. A separate
+      judge agent then evaluates each node against the original trace.
     </p>
+
+    <h2>Analysis</h2>
     <p>
-      Evaluation treats graph progress as more than node count: semantic
-      duplicates are merged, invalidation and regressions are penalized, and
-      results are grouped by task ID so several model trajectories for the same
-      issue are not treated as independent samples.
+      On a small matched subset of SWE-Bench-style coding traces from Claude-Opus-4.7,
+      GPT-5-mini, Gemini-3-Pro, and DeepSeek-v3.2, we observe distinct debugging patterns.
+      Claude-Opus-4.7 often moves directly from localization to implementation, while
+      Gemini-3-Pro and DeepSeek-v3.2 more often follow an explicit localization, reproduction,
+      and implementation sequence. These preliminary differences suggest that trace
+      graphs can reveal how agents approach a task, not only whether they eventually
+      solve it.
     </p>
 
     <h2>Status</h2>
     <p>
       This is an early prototype with a working ingest, decompose, verify, and
-      evaluate pipeline on SWE-Router-style coding traces. Pilot numbers so far
-      are a pipeline smoke test, not evidence for the research claim. Human
-      agreement, execution-level checks, and a handoff continuation experiment
-      are still ahead of us.
-    </p>
-    <p>
-      Gold patches and hidden tests stay evaluation-only. A successful command
-      is evidence that something ran, not that the semantic claim is correct.
+      evaluate pipeline on SWE-Bench-style coding traces.
     </p>
 
     <h2>Using the prototype</h2>
@@ -144,8 +169,21 @@
     </p>
 
     <footer>
-      Both authors can link this page:
-      <a href="https://semantic-tracegraph.github.io/semantic-tracegraph/">semantic-tracegraph.github.io/semantic-tracegraph</a>
+      <h2>Citation</h2>
+      <p>If you use this work, please cite:</p>
+      <cite>
+        Xinyi Wang and Neil Xu.
+        <em>Semantic TraceGraph: Evidence-Grounded Accomplishment Graphs for Coding-Agent Traces</em>.
+        2026.
+        <a href="https://semantic-tracegraph.github.io/semantic-tracegraph/">https://semantic-tracegraph.github.io/semantic-tracegraph/</a>
+      </cite>
+      <pre>@misc{wang2026semantictracegraph,
+  author       = {Wang, Xinyi and Xu, Neil},
+  title        = {Semantic TraceGraph: Evidence-Grounded Accomplishment Graphs for Coding-Agent Traces},
+  year         = {2026},
+  howpublished = {\url{https://semantic-tracegraph.github.io/semantic-tracegraph/}},
+  note         = {Software prototype}
+}</pre>
     </footer>
   </main>
 </body>
