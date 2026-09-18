@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
-import urllib.error
-import urllib.request
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from .agent_trace import assistant_message, make_agent_trace
+from .agent_trace import agent_runtime, assistant_message, complete_chat, make_agent_trace
+from .graph_spec import DEFAULT_GRAPH_SPEC, spec_from_graph
 from .sandbox import TraceSandbox
-from .schema import AccomplishmentGraph, AccomplishmentNode, EdgeType, NodeStatus, Trace
+from .schema import AccomplishmentGraph, AccomplishmentNode, GraphSpec, NodeStatus, Trace, to_dict
 
 
 @dataclass(slots=True)
@@ -38,7 +35,8 @@ Steps:
 Graph context is supporting context, not evidence by itself. Confirm parent and child claims
 against real trace events. If this node semantically depends on a contradicted or unsupported
 parent, account for that in the verdict; do not mark it verified merely because a downstream
-action ran.
+action ran. Use the provided node-type definition when judging whether the claim matches the
+intended accomplishment kind.
 
 Status guide:
 - `claimed`: cited evidence is missing, weak, misread, or the work was later undone.
@@ -149,14 +147,16 @@ def verdict_from_payload(payload: dict[str, Any]) -> VerificationResult:
 def inspect_graph(
     graph: AccomplishmentGraph,
     node_id: str | None = None,
+    spec: GraphSpec | None = None,
 ) -> dict[str, Any]:
     """Return a JSON-safe structural view of a decomposed graph."""
+    spec = spec or spec_from_graph(graph)
 
     def node_payload(node: AccomplishmentNode) -> dict[str, Any]:
         return {
             "node_id": node.node_id,
             "claim": node.claim,
-            "type": node.type.value,
+            "type": str(node.type),
             "event_span": list(node.event_span),
             "evidence": [
                 {"event_id": item.event_id, "kind": item.kind, "excerpt": item.excerpt}
@@ -171,12 +171,12 @@ def inspect_graph(
 
     nodes = {node.node_id: node for node in graph.nodes}
     edges = [
-        {"source": edge.source, "target": edge.target, "type": edge.type.value}
+        {"source": edge.source, "target": edge.target, "type": str(edge.type)}
         for edge in graph.edges
     ]
-    dependency_types = {EdgeType.REQUIRES, EdgeType.PRODUCES, EdgeType.REFINES}
+    dependency_types = spec.dependency_edge_names()
     dependency_targets = {
-        edge.target for edge in graph.edges if edge.type in dependency_types
+        edge.target for edge in graph.edges if str(edge.type) in dependency_types
     }
     roots = [node.node_id for node in graph.nodes if node.node_id not in dependency_targets]
 
@@ -216,19 +216,31 @@ class AgentJudge:
         transport: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         session_id: str | None = None,
         user_agent: str | None = None,
+        graph_spec: GraphSpec | None = None,
     ) -> None:
-        self.model = model or os.environ.get("TRACEGRAPH_MODEL", "gpt-4.1-mini")
-        self.api_key = api_key or os.environ.get("TRACEGRAPH_API_KEY", "")
-        self.api_base = (
-            api_base or os.environ.get("TRACEGRAPH_API_BASE") or "https://api.openai.com/v1"
-        ).rstrip("/")
+        runtime = agent_runtime(
+            model=model,
+            api_key=api_key,
+            api_base=api_base,
+            session_id=session_id,
+            user_agent=user_agent,
+        )
+        self.model = runtime["model"]
+        self.api_key = runtime["api_key"]
+        self.api_base = runtime["api_base"]
         self.max_steps = max_steps
         self.transport = transport
-        # OpenCode Go requires a stable per-conversation session id and a self-identifying
-        # user agent; these headers are harmless for the OpenAI API.
-        self.session_id = session_id or os.environ.get("TRACEGRAPH_SESSION") or uuid.uuid4().hex
-        self.user_agent = user_agent or os.environ.get("TRACEGRAPH_USER_AGENT", "tracegraph-agent/0.1")
+        self.session_id = runtime["session_id"]
+        self.user_agent = runtime["user_agent"]
+        self.graph_spec = graph_spec
         self._sandboxes: dict[tuple[str, str], TraceSandbox] = {}
+
+    def _resolve_spec(self, graph: AccomplishmentGraph | None) -> GraphSpec:
+        if self.graph_spec is not None:
+            return self.graph_spec
+        if graph is not None:
+            return spec_from_graph(graph)
+        return DEFAULT_GRAPH_SPEC
 
     def __call__(
         self,
@@ -243,16 +255,23 @@ class AgentJudge:
         if sandbox is None:
             sandbox = TraceSandbox(trace)
             self._sandboxes[cache_key] = sandbox
+        spec = self._resolve_spec(graph)
+        node_type = str(node.type)
+        type_spec = spec.node_spec(node_type)
         node_payload = {
             "node_id": node.node_id,
             "claim": node.claim,
-            "type": node.type.value,
+            "type": node_type,
             "event_span": list(node.event_span),
             "evidence": [
                 {"event_id": item.event_id, "kind": item.kind, "excerpt": item.excerpt}
                 for item in node.evidence
             ],
             "artifact_delta": node.artifact_delta,
+            "type_definition": to_dict(type_spec) if type_spec is not None else {
+                "name": node_type,
+                "description": "Unknown type in the current graph spec.",
+            },
         }
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -312,7 +331,11 @@ class AgentJudge:
                         )
                     else:
                         content = json.dumps(
-                            inspect_graph(graph, arguments.get("node_id")),
+                            inspect_graph(
+                                graph,
+                                arguments.get("node_id"),
+                                spec=self._resolve_spec(graph),
+                            ),
                             ensure_ascii=False,
                         )
                 elif name == "submit_verdict":
@@ -382,30 +405,13 @@ class AgentJudge:
         return graph
 
     def _chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
-        payload = {
-            "model": self.model,
-            "temperature": 0,
-            "messages": messages,
-            "tools": TOOLS,
-        }
-        if self.transport is not None:
-            return self.transport(payload)
-        if not self.api_key:
-            raise RuntimeError("Set TRACEGRAPH_API_KEY before running the agent judge.")
-        request = urllib.request.Request(
-            f"{self.api_base}/chat/completions",
-            data=json.dumps(payload).encode(),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": self.user_agent,
-                "x-opencode-session": self.session_id,
-            },
-            method="POST",
+        return complete_chat(
+            model=self.model,
+            messages=messages,
+            tools=TOOLS,
+            api_key=self.api_key,
+            api_base=self.api_base,
+            session_id=self.session_id,
+            user_agent=self.user_agent,
+            transport=self.transport,
         )
-        try:
-            with urllib.request.urlopen(request, timeout=180) as response:
-                return json.loads(response.read())
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
-            raise RuntimeError(f"LLM request failed (HTTP {exc.code}): {body}") from exc

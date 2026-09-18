@@ -254,6 +254,39 @@ def completed_keys(path: str | Path) -> set[str]:
     return keys
 
 
+def sample_rows(
+    rows: list[dict[str, Any]],
+    size: int,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Take a seeded subset, or all rows when the requested size is larger."""
+    if size < 1:
+        raise ValueError("sample size must be at least 1")
+    if size >= len(rows):
+        return list(rows)
+    return random.Random(seed).sample(rows, size)
+
+
+def output_spec_hashes(path: str | Path) -> set[str]:
+    """Spec hashes already written to a graph JSONL file; missing hashes count as default."""
+    from .graph_spec import DEFAULT_GRAPH_SPEC, spec_hash
+
+    target = Path(path)
+    if not target.exists():
+        return set()
+    default = spec_hash(DEFAULT_GRAPH_SPEC)
+    hashes: set[str] = set()
+    with target.open() as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            graph = record.get("graph") if isinstance(record.get("graph"), dict) else record
+            metadata = (graph or {}).get("metadata") or {}
+            hashes.add(str(metadata.get("graph_spec_hash") or default))
+    return hashes
+
+
 def append_jsonl(row: dict[str, Any], path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)

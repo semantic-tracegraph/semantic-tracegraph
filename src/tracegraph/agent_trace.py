@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import urllib.error
+import urllib.request
+import uuid
+from collections.abc import Callable
 from typing import Any
 
 
@@ -63,3 +68,98 @@ def make_agent_trace(
         "messages": snapshot_messages(messages),
         **extra,
     }
+
+
+def complete_chat(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    api_key: str,
+    api_base: str,
+    session_id: str,
+    user_agent: str,
+    transport: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    timeout: int = 180,
+) -> dict[str, Any]:
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "messages": messages,
+        "tools": tools,
+    }
+    if transport is not None:
+        return transport(payload)
+    if not api_key:
+        raise RuntimeError("Set TRACEGRAPH_API_KEY before running a tracegraph agent.")
+    request = urllib.request.Request(
+        f"{api_base.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": user_agent,
+            "x-opencode-session": session_id,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        raise RuntimeError(f"LLM request failed (HTTP {exc.code}): {body}") from exc
+
+
+def agent_runtime(
+    model: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    session_id: str | None = None,
+    user_agent: str | None = None,
+) -> dict[str, str]:
+    return {
+        "model": model or os.environ.get("TRACEGRAPH_MODEL", "glm-3.5-flash"),
+        "api_key": api_key or os.environ.get("TRACEGRAPH_API_KEY", ""),
+        "api_base": (
+            api_base
+            or os.environ.get("TRACEGRAPH_API_BASE")
+            or "https://opencode.ai/zen/go/v1"
+        ).rstrip("/"),
+        "session_id": session_id or os.environ.get("TRACEGRAPH_SESSION") or uuid.uuid4().hex,
+        "user_agent": user_agent or os.environ.get("TRACEGRAPH_USER_AGENT", "tracegraph-agent/0.1"),
+    }
+
+
+def parse_tool_arguments(
+    tool_call: dict[str, Any],
+) -> tuple[str, dict[str, Any], str | None]:
+    """Return (name, arguments, error_content). error_content is set when JSON is invalid."""
+    name = str(tool_call.get("function", {}).get("name") or "")
+    try:
+        arguments = json.loads(tool_call.get("function", {}).get("arguments") or "{}")
+    except json.JSONDecodeError as exc:
+        return (
+            name,
+            {},
+            json.dumps(
+                {
+                    "ok": False,
+                    "errors": [
+                        f"arguments were not valid JSON ({exc}); resend a valid JSON object"
+                    ],
+                }
+            ),
+        )
+    if not isinstance(arguments, dict):
+        return (
+            name,
+            {},
+            json.dumps(
+                {
+                    "ok": False,
+                    "errors": ["arguments must be a JSON object"],
+                }
+            ),
+        )
+    return name, arguments, None

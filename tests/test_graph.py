@@ -1,8 +1,9 @@
 from copy import deepcopy
 import json
 
-from tracegraph.agent_decomposer import AgentDecomposer
+from tracegraph.agent_decomposer import AgentDecomposer, apply_segment_assignments
 from tracegraph.agent_judge import AgentJudge, inspect_graph, validate_verdict
+from tracegraph.agent_segmenter import WorkSegment
 from tracegraph.graph_builder import (
     coerce_json_array,
     graph_from_draft,
@@ -114,6 +115,150 @@ def fixture_graph_draft() -> dict:
             {"source": "n002", "target": "n003", "type": "requires"},
         ],
     }
+
+
+def fixture_segment_submission() -> dict:
+    return {
+        "segments": [
+            {
+                "segment_id": "local-find",
+                "event_span": ["e0000", "e0002"],
+                "objective": "Find the relevant implementation.",
+                "action_summary": "Searched for should_close and found message.py.",
+                "outcome_summary": "The relevant source location was identified.",
+                "evidence_event_ids": ["e0001", "e0002"],
+                "artifact_paths": ["src/message.py"],
+            },
+            {
+                "segment_id": "local-impl",
+                "event_span": ["e0003", "e0005"],
+                "objective": "Patch the relevant implementation.",
+                "action_summary": "Edited message.py.",
+                "outcome_summary": "The source change was written.",
+                "evidence_event_ids": ["e0004", "e0005"],
+                "artifact_paths": ["src/message.py"],
+            },
+            {
+                "segment_id": "local-test",
+                "event_span": ["e0006", "e0008"],
+                "objective": "Check the patched behavior.",
+                "action_summary": "Ran pytest on the targeted tests.",
+                "outcome_summary": "The targeted test passed.",
+                "evidence_event_ids": ["e0007", "e0008"],
+            },
+            {
+                "segment_id": "local-submit",
+                "event_span": ["e0009", "e0011"],
+                "objective": "Package the final patch.",
+                "action_summary": "Submitted the git diff.",
+                "outcome_summary": "The patch artifact was emitted.",
+                "evidence_event_ids": ["e0010", "e0011"],
+            },
+        ],
+        "coverage_note": "All task-relevant edit, test, and submission events are covered.",
+    }
+
+
+def short_segment_submission() -> dict:
+    return {
+        "segments": [
+            {
+                "segment_id": "local-find",
+                "event_span": ["e0000", "e0002"],
+                "objective": "Find the relevant implementation.",
+                "action_summary": "Searched for should_close and found message.py.",
+                "outcome_summary": "The relevant source location was identified.",
+                "evidence_event_ids": ["e0001", "e0002"],
+                "artifact_paths": ["src/message.py"],
+            }
+        ],
+        "coverage_note": "Short trajectory contains only localization work.",
+    }
+
+
+def with_segment_ids(draft: dict, ids: list[list[str]] | None = None) -> dict:
+    payload = deepcopy(draft)
+    for index, node in enumerate(payload["nodes"]):
+        node["segment_ids"] = ids[index] if ids is not None else [f"s{index:03d}"]
+    return payload
+
+
+def _tool_response(tool_calls: list[dict]) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "tool_calls": tool_calls}}]}
+
+
+def two_phase_decomposer_transport(
+    graph_draft: dict,
+    *,
+    segments: dict | None = None,
+    run_python_first: bool = False,
+    bad_graph_first: dict | None = None,
+    malformed_first: bool = False,
+    capture: dict | None = None,
+):
+    calls = {"count": 0, "assignment": 0}
+    segment_payload = segments or fixture_segment_submission()
+
+    def transport(payload: dict) -> dict:
+        calls["count"] += 1
+        names = {tool["function"]["name"] for tool in payload.get("tools") or []}
+        if capture is not None and "submit_graph" in names:
+            capture["payload"] = payload
+        if "submit_segments" in names:
+            if run_python_first and calls["count"] == 1:
+                return _tool_response(
+                    [
+                        {
+                            "id": "call_py",
+                            "type": "function",
+                            "function": {
+                                "name": "run_python",
+                                "arguments": json.dumps({"code": "result = trace.summary()"}),
+                            },
+                        }
+                    ]
+                )
+            return _tool_response(
+                [
+                    {
+                        "id": f"call_seg_{calls['count']}",
+                        "type": "function",
+                        "function": {
+                            "name": "submit_segments",
+                            "arguments": json.dumps(segment_payload),
+                        },
+                    }
+                ]
+            )
+        calls["assignment"] += 1
+        if malformed_first and calls["assignment"] == 1:
+            return _tool_response(
+                [
+                    {
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {"name": "submit_graph", "arguments": "{not valid json"},
+                    }
+                ]
+            )
+        draft = graph_draft
+        if bad_graph_first is not None and calls["assignment"] == 1:
+            draft = bad_graph_first
+        return _tool_response(
+            [
+                {
+                    "id": f"call_g_{calls['count']}",
+                    "type": "function",
+                    "function": {
+                        "name": "submit_graph",
+                        "arguments": json.dumps(draft),
+                    },
+                }
+            ]
+        )
+
+    transport.calls = calls  # type: ignore[attr-defined]
+    return transport
 
 
 def test_sandbox_summary_and_grep() -> None:
@@ -274,49 +419,21 @@ def test_judge_can_inspect_graph_structure() -> None:
     assert neighborhood["is_root"] is False
 
 
-def _tool_response(tool_calls: list[dict]) -> dict:
-    return {"choices": [{"message": {"role": "assistant", "tool_calls": tool_calls}}]}
-
-
 def test_agent_decomposer_submits_valid_graph() -> None:
     trace = fixture_trace()
-    draft = fixture_graph_draft()
-    calls = {"count": 0}
-
-    def transport(_payload: dict) -> dict:
-        calls["count"] += 1
-        if calls["count"] == 1:
-            return _tool_response(
-                [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {
-                            "name": "run_python",
-                            "arguments": json.dumps({"code": "result = trace.summary()"}),
-                        },
-                    }
-                ]
-            )
-        return _tool_response(
-            [
-                {
-                    "id": "call_2",
-                    "type": "function",
-                    "function": {
-                        "name": "submit_graph",
-                        "arguments": json.dumps(draft),
-                    },
-                }
-            ]
-        )
-
+    transport = two_phase_decomposer_transport(
+        with_segment_ids(fixture_graph_draft()),
+        run_python_first=True,
+    )
     graph = AgentDecomposer("fake", transport=transport, max_steps=4).decompose(trace)
     assert len(graph.nodes) == 4
     assert graph.metadata["decomposer"] == "agent:fake"
-    assert graph.metadata["agent_steps"] == 2
+    assert graph.metadata["agent_steps"] == 1
+    assert graph.nodes[0].segment_ids == ["s000"]
+    assert graph.nodes[0].event_span == ("e0000", "e0002")
+    assert graph.metadata["agent_traces"]["segmenter"]["steps"] == 2
     decomposer_trace = graph.metadata["agent_traces"]["decomposer"]
-    assert decomposer_trace["steps"] == 2
+    assert decomposer_trace["steps"] == 1
     assert decomposer_trace["model"] == "fake"
     roles = [message["role"] for message in decomposer_trace["messages"]]
     assert "system" in roles
@@ -325,26 +442,12 @@ def test_agent_decomposer_submits_valid_graph() -> None:
 
 def test_agent_decomposer_accepts_json_encoded_node_array() -> None:
     trace = fixture_trace()
-    draft = fixture_graph_draft()
+    draft = with_segment_ids(fixture_graph_draft())
     encoded = {
         "nodes": json.dumps(draft["nodes"]),
         "edges": json.dumps(draft["edges"]),
     }
-
-    def transport(_payload: dict) -> dict:
-        return _tool_response(
-            [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "submit_graph",
-                        "arguments": json.dumps(encoded),
-                    },
-                }
-            ]
-        )
-
+    transport = two_phase_decomposer_transport(encoded)
     graph = AgentDecomposer("fake", transport=transport, max_steps=2).decompose(trace)
     assert len(graph.nodes) == 4
     assert len(graph.edges) == 3
@@ -352,62 +455,147 @@ def test_agent_decomposer_accepts_json_encoded_node_array() -> None:
 
 def test_agent_decomposer_retries_after_validation_error() -> None:
     trace = fixture_trace()
-    draft = fixture_graph_draft()
+    draft = with_segment_ids(fixture_graph_draft())
     bad_draft = deepcopy(draft)
-    bad_draft["nodes"][0]["event_span"] = ["missing", "e0002"]
-    calls = {"count": 0}
-
-    def transport(_payload: dict) -> dict:
-        calls["count"] += 1
-        graph_payload = bad_draft if calls["count"] == 1 else draft
-        return _tool_response(
-            [
-                {
-                    "id": f"call_{calls['count']}",
-                    "type": "function",
-                    "function": {
-                        "name": "submit_graph",
-                        "arguments": json.dumps(graph_payload),
-                    },
-                }
-            ]
-        )
-
+    bad_draft["nodes"][0]["claim"] = "test"
+    transport = two_phase_decomposer_transport(draft, bad_graph_first=bad_draft)
     graph = AgentDecomposer("fake", transport=transport, max_steps=4).decompose(trace)
     assert len(graph.nodes) == 4
-    assert calls["count"] == 2
+    assert transport.calls["assignment"] == 2
 
 
 def test_agent_decomposer_recovers_from_malformed_arguments() -> None:
     trace = fixture_trace()
-    draft = fixture_graph_draft()
-    calls = {"count": 0}
-
-    def transport(_payload: dict) -> dict:
-        calls["count"] += 1
-        if calls["count"] == 1:
-            return _tool_response(
-                [
-                    {
-                        "id": "call_bad",
-                        "type": "function",
-                        "function": {"name": "submit_graph", "arguments": "{not valid json"},
-                    }
-                ]
-            )
-        return _tool_response(
-            [
-                {
-                    "id": "call_ok",
-                    "type": "function",
-                    "function": {"name": "submit_graph", "arguments": json.dumps(draft)},
-                }
-            ]
-        )
-
+    transport = two_phase_decomposer_transport(
+        with_segment_ids(fixture_graph_draft()),
+        malformed_first=True,
+    )
     graph = AgentDecomposer("fake", transport=transport, max_steps=4).decompose(trace)
     assert len(graph.nodes) == 4
-    assert calls["count"] == 2
+    assert transport.calls["assignment"] == 2
+
+
+def test_apply_segment_assignments_merges_consecutive_and_skips_unmatched() -> None:
+    segments = [
+        WorkSegment(
+            segment_id="s000",
+            trace_key="task::agent",
+            event_span=("e0000", "e0002"),
+            objective="Find code",
+            action_summary="Searched",
+            outcome_summary="Found",
+            evidence_event_ids=["e0001"],
+        ),
+        WorkSegment(
+            segment_id="s001",
+            trace_key="task::agent",
+            event_span=("e0003", "e0005"),
+            objective="Keep looking",
+            action_summary="Read more",
+            outcome_summary="Confirmed site",
+            evidence_event_ids=["e0004"],
+        ),
+        WorkSegment(
+            segment_id="s002",
+            trace_key="task::agent",
+            event_span=("e0006", "e0008"),
+            objective="Unmatched chatter",
+            action_summary="Noted a side issue",
+            outcome_summary="Left it alone",
+            evidence_event_ids=["e0007"],
+        ),
+        WorkSegment(
+            segment_id="s003",
+            trace_key="task::agent",
+            event_span=("e0009", "e0011"),
+            objective="Patch",
+            action_summary="Edited",
+            outcome_summary="Changed source",
+            evidence_event_ids=["e0010"],
+        ),
+    ]
+    draft = {
+        "nodes": [
+            {
+                "node_id": "n000",
+                "claim": "Located the relevant site",
+                "type": "localization",
+                "segment_ids": ["s001", "s000"],
+                "evidence": [{"event_id": "e0001", "kind": "action", "excerpt": "rg"}],
+            },
+            {
+                "node_id": "n001",
+                "claim": "Patched the relevant site",
+                "type": "implementation",
+                "segment_ids": ["s003"],
+                "evidence": [{"event_id": "e0010", "kind": "action", "excerpt": "sed"}],
+            },
+        ],
+        "edges": [{"source": "n000", "target": "n001", "type": "requires"}],
+    }
+    filled, errors = apply_segment_assignments(draft, segments)
+    assert errors == []
+    assert filled["nodes"][0]["segment_ids"] == ["s000", "s001"]
+    assert filled["nodes"][0]["event_span"] == ["e0000", "e0005"]
+    assert filled["nodes"][1]["event_span"] == ["e0009", "e0011"]
+
+
+def test_apply_segment_assignments_rejects_nonconsecutive_and_duplicate_ids() -> None:
+    segments = [
+        WorkSegment(
+            segment_id="s000",
+            trace_key="task::agent",
+            event_span=("e0000", "e0002"),
+            objective="Find code",
+            action_summary="Searched",
+            outcome_summary="Found",
+            evidence_event_ids=["e0001"],
+        ),
+        WorkSegment(
+            segment_id="s001",
+            trace_key="task::agent",
+            event_span=("e0003", "e0005"),
+            objective="Patch",
+            action_summary="Edited",
+            outcome_summary="Changed",
+            evidence_event_ids=["e0004"],
+        ),
+        WorkSegment(
+            segment_id="s002",
+            trace_key="task::agent",
+            event_span=("e0006", "e0008"),
+            objective="Test",
+            action_summary="Ran tests",
+            outcome_summary="Passed",
+            evidence_event_ids=["e0007"],
+        ),
+    ]
+    skipped, skip_errors = apply_segment_assignments(
+        {
+            "nodes": [
+                {
+                    "node_id": "n000",
+                    "segment_ids": ["s000", "s002"],
+                }
+            ],
+            "edges": [],
+        },
+        segments,
+    )
+    assert any("consecutive" in error for error in skip_errors)
+    assert "event_span" not in skipped["nodes"][0]
+
+    _, dup_errors = apply_segment_assignments(
+        {
+            "nodes": [
+                {"node_id": "n000", "segment_ids": ["s000"]},
+                {"node_id": "n001", "segment_ids": ["s000"]},
+            ],
+            "edges": [],
+        },
+        segments,
+    )
+    assert any("assigned to both" in error for error in dup_errors)
 
 
 def test_agent_judge_does_not_share_sandbox_across_models() -> None:

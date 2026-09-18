@@ -9,7 +9,7 @@ from tracegraph.graph_builder import graph_from_draft
 from tracegraph.ingest import parse_messages
 from tracegraph.schema import to_dict
 
-from test_graph import _tool_response
+from test_graph import short_segment_submission, two_phase_decomposer_transport, with_segment_ids
 
 def test_assistant_message_accepts_string_payload() -> None:
     from tracegraph.agent_trace import assistant_message
@@ -18,6 +18,17 @@ def test_assistant_message_accepts_string_payload() -> None:
     assert message["role"] == "assistant"
     assert message["content"] == "just text"
     assert not message.get("tool_calls")
+
+
+def test_agent_runtime_defaults_to_opencode_go(monkeypatch) -> None:
+    from tracegraph.agent_trace import agent_runtime
+
+    monkeypatch.delenv("TRACEGRAPH_MODEL", raising=False)
+    monkeypatch.delenv("TRACEGRAPH_API_BASE", raising=False)
+    runtime = agent_runtime(api_key="test-key")
+
+    assert runtime["model"] == "glm-3.5-flash"
+    assert runtime["api_base"] == "https://opencode.ai/zen/go/v1"
 
 
 
@@ -84,27 +95,23 @@ def test_decompose_resumes_from_partial_output(tmp_path: Path) -> None:
     )
 
     calls = {"count": 0}
+    transport = two_phase_decomposer_transport(
+        with_segment_ids(_small_draft()),
+        segments=short_segment_submission(),
+    )
+    original_transport = transport
 
-    def transport(_payload: dict) -> dict:
+    def counting_transport(payload: dict) -> dict:
         calls["count"] += 1
-        return _tool_response(
-            [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "submit_graph",
-                        "arguments": json.dumps(_small_draft()),
-                    },
-                }
-            ]
-        )
+        return original_transport(payload)
 
     def factory(**kwargs):
         return AgentDecomposer(
             model=kwargs.get("model"),
             max_steps=kwargs.get("max_steps", 4),
-            transport=transport,
+            segmentation_max_steps=kwargs.get("segmentation_max_steps", 8),
+            graph_spec=kwargs.get("graph_spec"),
+            transport=counting_transport,
         )
 
     with patch("tracegraph.cli.AgentDecomposer", factory):
@@ -122,5 +129,5 @@ def test_decompose_resumes_from_partial_output(tmp_path: Path) -> None:
 
     lines = [line for line in output_path.read_text().splitlines() if line.strip()]
     assert len(lines) == 2
-    assert calls["count"] == 1
+    assert calls["count"] == 2
     assert completed_keys(output_path) == {"task::agent", "task-2::agent"}

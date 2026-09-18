@@ -115,48 +115,88 @@
 
     <h2>What this is</h2>
     <p>
-      Analyzing agent traces helps us understand their capabilities, failure modes, and
-      potential inefficiencies. Most agent evaluations use a final pass/fail outcome for
-      simplicity, but that outcome ignores useful intermediate work, especially in failed
-      trajectories. As agents take on more complex tasks, a single trajectory can contain
-      several task-relevant accomplishments. Measuring those accomplishments provides a
-      richer view of agent behavior and cost.
+      As agents take on more complex tasks, a single trajectory can contain several
+      meaningful pieces of work. Most agent evaluations reduce that trajectory to a final
+      pass/fail outcome. Although simple, that outcome hides useful intermediate progress,
+      especially when the overall task fails.
+    </p>
+    <p>
+      Measuring the subtasks inside a trajectory gives us a richer view of agent behavior
+      and a better way to understand cost per accomplishment. This matters in real-world
+      use, where an agent may brainstorm, explore, diagnose, and implement within one
+      open-ended session.
     </p>
     <p>
       Semantic TraceGraph turns an agent trace into a small, evidence-grounded task graph.
-      The graph is a directed acyclic graph (DAG) whose nodes represent accomplishments
-      supported by consecutive spans of the trace. In coding-agent traces, for example, a
-      localization node can cover the searches and code reading that identify the relevant
-      files and symbols. Edges capture causal relationships: an implementation node may
-      depend on a localization node because the edit requires the earlier codebase
-      understanding.
+      Each node represents an accomplishment supported by a consecutive span of events, and
+      each edge records a causal relationship between accomplishments. In a coding trace,
+      for example, one node might capture the search and reading that locate a relevant
+      function, while a later implementation node depends on that earlier understanding.
     </p>
 
     <h2>How it works</h2>
     <p>
-      A lightweight decomposer agent constructs the graph from a trajectory. It can inspect
-      selected events through a read-only Python sandbox rather than loading the entire
-      trace into context. It then submits a candidate graph to a validator, which checks
-      structural requirements such as valid evidence references and causal edges. The
-      decomposer iterates within a fixed step budget until the graph is accepted. A separate
-      judge agent then evaluates each node against the original trace.
+      Before decomposing trajectories, we need a shared ontology of the kinds of work they
+      may contain. We call this ontology a <em>graph spec</em>. It defines reusable node
+      types, their evidence criteria, valid edge types, and structural rules for the graph.
+      The pipeline uses two agent workflows:
+    </p>
+    <ul>
+      <li>
+        <strong>Graph spec construction</strong> learns a shared spec from a small calibration
+        set of existing trajectories.
+      </li>
+      <li>
+        <strong>Trajectory decomposition</strong> applies that spec to a new trajectory to
+        produce an evidence-grounded graph.
+      </li>
+    </ul>
+    <p>
+      Spec construction has two stages. First, a type-blind segmentation agent divides each
+      calibration trajectory into ordered, non-overlapping units of work without seeing any
+      candidate ontology. Second, a spec construction agent compares those segments by
+      intent, state transition, and evidence pattern. It clusters similar segments into node
+      types and infers reusable causal relationships as edge types.
+    </p>
+    <p>
+      Decomposition follows the same boundary-first design. It reuses the type-blind
+      segmenter on a new trajectory, then classifies the resulting work units against the
+      learned spec. Consecutive segments may be merged when they form one accomplishment,
+      and unmatched segments may be omitted. The final nodes retain their source segment and
+      event IDs, keeping every claim traceable to the original trajectory.
     </p>
 
     <h2>Analysis</h2>
     <p>
-      On a small matched subset of SWE-Bench-style coding traces from Claude-Opus-4.7,
-      GPT-5-mini, Gemini-3-Pro, and DeepSeek-v3.2, we observe distinct debugging patterns.
-      Claude-Opus-4.7 often moves directly from localization to implementation, while
-      Gemini-3-Pro and DeepSeek-v3.2 more often follow an explicit localization, reproduction,
-      and implementation sequence. These preliminary differences suggest that trace
-      graphs can reveal how agents approach a task, not only whether they eventually
-      solve it.
+      We ran an initial end-to-end test on SWE-Bench-style coding-agent trajectories. The
+      calibration set contained 10 short, unresolved trajectories from a GPT-5 Mini coding
+      agent. Type-blind segmentation produced 41 work units. The spec construction agent
+      grouped them into four recurring node types:
+      <code>locate_and_inspect_code</code> (12 segments), <code>apply_fix</code>
+      (11), <code>verify_behavior</code> (10), and <code>submit_change</code> (8).
+      It also inferred three dependency relationships: <code>targets</code>,
+      <code>validates</code>, and <code>packages</code>.
+    </p>
+    <p>
+      We then applied that learned spec to one held-out SWE-Bench trajectory. The segmenter
+      identified five work units, and the decomposer mapped them to five graph nodes connected
+      by six edges. The graph captured a progression from locating an unencoded file read, to
+      applying a UTF-8 fix, attempting verification, checking for related calls, and submitting
+      the patch. This small run confirms that the learned spec can be reused on an unseen
+      trajectory while preserving event-level evidence.
+    </p>
+    <p>
+      This is a pipeline smoke test, not a claim that the four-type ontology is complete.
+      Because the calibration traces were short and unresolved, a larger and more diverse
+      sample may reveal additional accomplishment types or different boundaries. Our next
+      step is to test spec stability across broader SWE-Bench samples and our own coding-agent
+      trajectories.
     </p>
 
     <h2>Status</h2>
     <p>
-      This is an early prototype with a working ingest, decompose, verify, and
-      evaluate pipeline on SWE-Bench-style coding traces.
+      This is an early prototype with working ingestion, spec construction, segmentation,
+      decomposition, verification, and evaluation for SWE-Bench-style coding traces.
     </p>
 
     <h2>Using the prototype</h2>
@@ -164,7 +204,7 @@
       Clone the repository, install with
       <code>pip install -e '.[dev]'</code>, and set
       <code>TRACEGRAPH_API_KEY</code>. The CLI entry point is
-      <code>tracegraph</code> (audit, sample, decompose, verify, evaluate).
+      <code>tracegraph</code> (audit, sample, construct-spec, decompose, verify, evaluate).
       Details are in the README.
     </p>
 

@@ -10,7 +10,9 @@ from .data import (
     audit_datasets,
     completed_keys,
     matches_trace_models,
+    output_spec_hashes,
     read_jsonl,
+    sample_rows,
     select_per_model_pilot,
     select_stratified_pilot,
     trajectory_key,
@@ -19,7 +21,9 @@ from .data import (
     write_jsonl,
 )
 from .agent_decomposer import AgentDecomposer
+from .agent_spec_constructor import AgentSpecConstructor
 from .evaluate import annotation_agreement, evaluate_graphs, handoff_lift
+from .graph_spec import DEFAULT_GRAPH_SPEC, load_graph_spec, spec_hash, spec_metadata
 from .ingest import parse_messages
 from .schema import graph_from_dict, to_dict, trace_from_dict
 from .agent_judge import AgentJudge
@@ -49,11 +53,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated Hugging Face splits to export with --all (default: valid,test)",
     )
 
+    construct = commands.add_parser(
+        "construct-spec",
+        help="Inspect a calibration set of trajectories and write a graph spec",
+    )
+    construct.add_argument("--input", required=True)
+    construct.add_argument("--output", required=True)
+    construct.add_argument("--model", help="LLM model for the spec constructor")
+    construct.add_argument("--max-steps", type=int, default=24, help="Clustering step budget")
+    construct.add_argument(
+        "--segmentation-max-steps",
+        type=int,
+        default=8,
+        help="Step budget for segmenting each calibration trajectory",
+    )
+    construct.add_argument("--sample-size", type=int, default=8)
+    construct.add_argument("--seed", type=int, default=7)
+    construct.add_argument(
+        "--trace-model",
+        action="append",
+        dest="trace_models",
+        help="Only calibrate on trajectories from this coding-agent model; repeatable",
+    )
+
     decompose = commands.add_parser("decompose", help="Build accomplishment graphs")
     decompose.add_argument("--input", required=True)
     decompose.add_argument("--output", required=True)
     decompose.add_argument("--model", help="LLM model for the agent decomposer")
     decompose.add_argument("--max-steps", type=int, default=16)
+    decompose.add_argument(
+        "--segmentation-max-steps",
+        type=int,
+        default=8,
+        help="Step budget for type-blind segmentation before graph assignment",
+    )
     decompose.add_argument("--limit", type=int, help="Process at most this many new trajectories")
     decompose.add_argument(
         "--trace-model",
@@ -72,6 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Log failures and keep going (default: true)",
+    )
+    decompose.add_argument(
+        "--spec",
+        help="Path to a graph spec JSON from construct-spec (default: built-in coding-agent spec)",
     )
     verify = commands.add_parser("verify", help="Verify graph evidence")
     verify.add_argument("--input", required=True)
@@ -142,16 +179,29 @@ def main(argv: list[str] | None = None) -> None:
         else:
             rows = select_stratified_pilot(args.total_rows, args.seed)
             write_jsonl(rows, args.output)
+    elif args.command == "construct-spec":
+        _construct_spec(
+            args.input,
+            args.output,
+            args.model,
+            args.max_steps,
+            segmentation_max_steps=args.segmentation_max_steps,
+            sample_size=args.sample_size,
+            seed=args.seed,
+            trace_models=set(args.trace_models or []),
+        )
     elif args.command == "decompose":
         _decompose(
             args.input,
             args.output,
             args.model,
             args.max_steps,
+            segmentation_max_steps=args.segmentation_max_steps,
             limit=args.limit,
             trace_models=set(args.trace_models or []),
             resume=args.resume,
             continue_on_error=args.continue_on_error,
+            spec_path=args.spec,
         )
     elif args.command == "verify":
         _verify(
@@ -178,17 +228,76 @@ def main(argv: list[str] | None = None) -> None:
         write_json(handoff_lift(read_jsonl(args.input)), args.output)
 
 
+def _construct_spec(
+    input_path: str,
+    output_path: str,
+    model: str | None,
+    max_steps: int,
+    segmentation_max_steps: int = 8,
+    sample_size: int = 8,
+    seed: int = 7,
+    trace_models: set[str] | None = None,
+) -> None:
+    rows = [row for row in read_jsonl(input_path) if matches_trace_models(row, trace_models)]
+    if not rows:
+        raise SystemExit("construct-spec found no matching trajectories in --input.")
+    selected = sample_rows(rows, sample_size, seed)
+    traces = [parse_messages(row) for row in selected]
+    spec, agent_trace = AgentSpecConstructor(
+        model=model,
+        max_steps=max_steps,
+        segmentation_max_steps=segmentation_max_steps,
+    ).construct(traces)
+    payload = {
+        **spec_metadata(spec),
+        "spec": to_dict(spec),
+        "provenance": {
+            "input": input_path,
+            "sample_size": len(traces),
+            "seed": seed,
+            "calibration_keys": [
+                f"{trace.instance_id}::{trace.model}" for trace in traces
+            ],
+            "constructor": f"agent:{agent_trace['model']}",
+            "agent_traces": {"spec_constructor": agent_trace},
+        },
+    }
+    write_json(payload, output_path)
+    print(
+        f"wrote spec {spec.spec_id} v{spec.version} "
+        f"({len(spec.node_types)} node types, {len(spec.edge_types)} edge types) -> {output_path}",
+        file=sys.stderr,
+    )
+
+
 def _decompose(
     input_path: str,
     output_path: str,
     model: str | None,
     max_steps: int,
+    segmentation_max_steps: int = 8,
     limit: int | None = None,
     trace_models: set[str] | None = None,
     resume: bool = True,
     continue_on_error: bool = True,
+    spec_path: str | None = None,
 ) -> None:
-    decomposer = AgentDecomposer(model=model, max_steps=max_steps)
+    spec = load_graph_spec(spec_path) if spec_path else DEFAULT_GRAPH_SPEC
+    current_hash = spec_hash(spec)
+    if resume:
+        existing = output_spec_hashes(output_path)
+        if existing and existing != {current_hash}:
+            raise SystemExit(
+                f"Output {output_path} contains graphs built with spec hash "
+                f"{sorted(existing)}, but this run uses {current_hash}. "
+                "Use a new --output or --no-resume."
+            )
+    decomposer = AgentDecomposer(
+        model=model,
+        max_steps=max_steps,
+        segmentation_max_steps=segmentation_max_steps,
+        graph_spec=spec,
+    )
     done = completed_keys(output_path) if resume else set()
     if not resume:
         Path(output_path).unlink(missing_ok=True)
