@@ -292,6 +292,26 @@ tracegraph annotation-template \
   --limit 30
 ```
 
+Create a self-contained task-decomposition flamegraph from one or more graphs:
+
+```bash
+tracegraph visualize \
+  --input artifacts/verified.jsonl \
+  --instance-id TASK_ID \
+  --output artifacts/task-flamegraph.html
+```
+
+The visualizer derives a primary-parent tree from the existing causal graph; it
+does not change the graph or call a model. Incoming `requires`, `refines`, and
+`produces` edges are considered in that order, with the nearest earlier source
+used as a tie-breaker. Other edges remain visible in the selected node's detail
+panel. Omit `--instance-id` to put all input graphs in one HTML file with a
+trajectory selector. Bars are ordered by transcript position, support click-to-
+zoom, and can be flipped between flamegraph and icicle orientation. Width is
+estimated transcript tokens when the input includes a trace, or event count for
+graph-only input. Token width is explicitly approximate because Cursor's local
+transcript cache does not include exact usage counters.
+
 Run the test suite:
 
 ```bash
@@ -307,4 +327,3 @@ claim is correct.
 nodes and penalizes invalidation and regressions.
 - Report results grouped by task ID so multiple model trajectories for one task
 are not treated as independent samples.
-

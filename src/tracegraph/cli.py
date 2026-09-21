@@ -4,6 +4,7 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 from .data import (
     append_jsonl,
@@ -28,6 +29,7 @@ from .cursor_ingest import default_cursor_root, ingest_cursor_transcripts
 from .ingest import parse_messages
 from .schema import graph_from_dict, to_dict, trace_from_dict
 from .agent_judge import AgentJudge
+from .visualize import graph_visualization_data, write_visualization_html
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,6 +181,16 @@ def build_parser() -> argparse.ArgumentParser:
     handoff = commands.add_parser("handoff", help="Summarize handoff trial records")
     handoff.add_argument("--input", required=True)
     handoff.add_argument("--output", required=True)
+
+    visualize = commands.add_parser(
+        "visualize",
+        help="Write an interactive task-decomposition flamegraph",
+    )
+    visualize.add_argument("--input", required=True, help="Graph JSONL from decompose or verify")
+    visualize.add_argument("--output", required=True, help="Self-contained HTML output path")
+    visualize.add_argument("--instance-id", help="Include only this task instance")
+    visualize.add_argument("--trace-model", help="Include only this coding-agent model")
+    visualize.add_argument("--limit", type=int, default=0, help="Maximum graphs (0 = all matches)")
     return parser
 
 
@@ -272,6 +284,14 @@ def main(argv: list[str] | None = None) -> None:
         _annotation_template(args.input, args.output, args.limit)
     elif args.command == "handoff":
         write_json(handoff_lift(read_jsonl(args.input)), args.output)
+    elif args.command == "visualize":
+        _visualize(
+            args.input,
+            args.output,
+            instance_id=args.instance_id,
+            trace_model=args.trace_model,
+            limit=args.limit,
+        )
 
 
 def _construct_spec(
@@ -451,6 +471,32 @@ def _annotation_template(input_path: str, output_path: str, limit: int) -> None:
             }
         )
     write_jsonl(packet, output_path)
+
+
+def _visualize(
+    input_path: str,
+    output_path: str,
+    *,
+    instance_id: str | None = None,
+    trace_model: str | None = None,
+    limit: int = 0,
+) -> None:
+    payloads: list[dict[str, Any]] = []
+    for record in read_jsonl(input_path):
+        raw_graph = record.get("graph", record)
+        if instance_id and raw_graph.get("instance_id") != instance_id:
+            continue
+        if trace_model and raw_graph.get("model") != trace_model:
+            continue
+        graph = graph_from_dict(raw_graph)
+        trace = trace_from_dict(record["trace"]) if isinstance(record.get("trace"), dict) else None
+        payloads.append(graph_visualization_data(graph, trace))
+        if limit and len(payloads) >= limit:
+            break
+    if not payloads:
+        raise SystemExit("visualize found no matching graphs in --input.")
+    write_visualization_html(payloads, output_path)
+    print(f"wrote {len(payloads)} task flamegraph(s) -> {output_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
