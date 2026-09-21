@@ -51,9 +51,70 @@
       font-size: 1.15rem;
       font-weight: 600;
     }
+    h3 {
+      margin: 1.4rem 0 0.45rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
     p, li { color: #292524; }
     ul { padding-left: 1.2rem; }
     li { margin: 0.35rem 0; }
+    figure.chart {
+      margin: 1.15rem 0 1.5rem;
+      padding: 0.85rem 0 0.1rem;
+    }
+    figure.chart figcaption {
+      margin: 0 0 0.75rem;
+      font: 0.78rem/1.35 ui-sans-serif, system-ui, sans-serif;
+      color: var(--muted);
+    }
+    ol.bars {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    ol.bars li {
+      display: grid;
+      grid-template-columns: 11.5rem minmax(0, 1fr) 1.6rem;
+      gap: 0.55rem 0.7rem;
+      align-items: center;
+      margin: 0.28rem 0;
+    }
+    ol.bars .label {
+      font: 0.78rem/1.25 ui-sans-serif, system-ui, sans-serif;
+      color: #44403c;
+      text-align: right;
+    }
+    ol.bars .track {
+      display: block;
+      height: 0.72rem;
+      background: #efece7;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    ol.bars .fill {
+      display: block;
+      height: 100%;
+      width: calc(var(--n) / 10 * 100%);
+      background: #44403c;
+      border-radius: 2px;
+    }
+    ol.bars .count {
+      font: 0.78rem/1 ui-sans-serif, system-ui, sans-serif;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 40rem) {
+      ol.bars li {
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+          "label count"
+          "bar bar";
+      }
+      ol.bars .label { grid-area: label; text-align: left; }
+      ol.bars .track { grid-area: bar; }
+      ol.bars .count { grid-area: count; }
+    }
     .links {
       display: flex;
       flex-wrap: wrap;
@@ -167,6 +228,8 @@
     </p>
 
     <h2>Analysis</h2>
+
+    <h3>SWE-Bench trajectories</h3>
     <p>
       We ran an initial end-to-end test on SWE-Bench-style coding-agent trajectories. The
       calibration set contained 10 short, unresolved trajectories from a GPT-5 Mini coding
@@ -185,18 +248,107 @@
       the patch. This small run confirms that the learned spec can be reused on an unseen
       trajectory while preserving event-level evidence.
     </p>
+
+    <h3>Cursor trajectories</h3>
     <p>
-      This is a pipeline smoke test, not a claim that the four-type ontology is complete.
-      Because the calibration traces were short and unresolved, a larger and more diverse
-      sample may reveal additional accomplishment types or different boundaries. Our next
-      step is to test spec stability across broader SWE-Bench samples and our own coding-agent
-      trajectories.
+      We next applied the same pipeline to our own Cursor agent sessions. Local transcripts
+      were converted into the shared trajectory format, then split at each user request so
+      that a long multi-turn chat becomes several trajectories, each starting from one
+      <code>&lt;user_query&gt;</code>. Seven conversations produced 275 such turns
+      (median 5 events per turn, versus hundreds of events when a whole session is kept as
+      one trace). Tool results are usually missing from the Cursor cache, so evidence is
+      mostly tool invocations and assistant reasoning.
     </p>
+    <p>
+      We calibrated on 30 of those turns, stratified across the seven conversations and
+      mixing short and longer slices. Type-blind segmentation produced 80 work units. The
+      spec constructor clustered them into an 11-type ontology,
+      <code>coding_agent_work_graph</code>, with a typical order of
+      <code>survey_and_plan</code>, <code>setup_environment</code>,
+      <code>implement_code</code>, <code>author_docs</code>,
+      <code>repair_defect</code>, <code>verify_work</code>,
+      <code>publish_code</code>, <code>administer_repo</code>,
+      <code>execute_workload</code>, <code>diagnose_failure</code>, and
+      <code>investigate_and_report</code>. Compared with the SWE-Bench spec, this ontology
+      is broader than locate/fix/verify/submit: it also covers environment setup, docs,
+      git publish, repo administration, long-running jobs, and question-answering turns
+      that do not change the workspace.
+    </p>
+    <p>
+      Decomposition of the same 30 turns produced 27 graphs (three timed out or failed to
+      submit). Those graphs contain 55 nodes in total, usually one accomplishment per user
+      turn (at most six). The most common types were
+      <code>investigate_and_report</code> (10), <code>survey_and_plan</code> (9), and
+      <code>verify_work</code> (8). That distribution matches the split: many Cursor
+      follow-ups are a single question, check, or small edit rather than a full SWE-Bench
+      issue.
+    </p>
+    <figure class="chart">
+      <figcaption>Accomplishment types in 27 decomposed Cursor graphs (55 nodes)</figcaption>
+      <ol class="bars">
+        <li>
+          <span class="label">investigate and report</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 10"></span></span>
+          <span class="count">10</span>
+        </li>
+        <li>
+          <span class="label">survey and plan</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 9"></span></span>
+          <span class="count">9</span>
+        </li>
+        <li>
+          <span class="label">verify work</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 8"></span></span>
+          <span class="count">8</span>
+        </li>
+        <li>
+          <span class="label">implement code</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 5"></span></span>
+          <span class="count">5</span>
+        </li>
+        <li>
+          <span class="label">execute workload</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 5"></span></span>
+          <span class="count">5</span>
+        </li>
+        <li>
+          <span class="label">author docs</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 4"></span></span>
+          <span class="count">4</span>
+        </li>
+        <li>
+          <span class="label">publish code</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 4"></span></span>
+          <span class="count">4</span>
+        </li>
+        <li>
+          <span class="label">administer repo</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 3"></span></span>
+          <span class="count">3</span>
+        </li>
+        <li>
+          <span class="label">repair defect</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 3"></span></span>
+          <span class="count">3</span>
+        </li>
+        <li>
+          <span class="label">setup environment</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 2"></span></span>
+          <span class="count">2</span>
+        </li>
+        <li>
+          <span class="label">diagnose failure</span>
+          <span class="track" aria-hidden="true"><span class="fill" style="--n: 2"></span></span>
+          <span class="count">2</span>
+        </li>
+      </ol>
+    </figure>
 
     <h2>Status</h2>
     <p>
       This is an early prototype with working ingestion, spec construction, segmentation,
-      decomposition, verification, and evaluation for SWE-Bench-style coding traces.
+      decomposition, verification, and evaluation. It currently supports SWE-Bench-style
+      coding traces and local Cursor agent transcripts.
     </p>
 
     <h2>Using the prototype</h2>

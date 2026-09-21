@@ -24,6 +24,7 @@ from .agent_decomposer import AgentDecomposer
 from .agent_spec_constructor import AgentSpecConstructor
 from .evaluate import annotation_agreement, evaluate_graphs, handoff_lift
 from .graph_spec import DEFAULT_GRAPH_SPEC, load_graph_spec, spec_hash, spec_metadata
+from .cursor_ingest import default_cursor_root, ingest_cursor_transcripts
 from .ingest import parse_messages
 from .schema import graph_from_dict, to_dict, trace_from_dict
 from .agent_judge import AgentJudge
@@ -51,6 +52,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--splits",
         default="valid,test",
         help="Comma-separated Hugging Face splits to export with --all (default: valid,test)",
+    )
+
+    ingest_cursor = commands.add_parser(
+        "ingest-cursor",
+        help="Convert local Cursor agent transcripts into trajectory JSONL",
+    )
+    ingest_cursor.add_argument(
+        "--root",
+        default=str(default_cursor_root()),
+        help="Cursor projects directory (default: ~/.cursor/projects)",
+    )
+    ingest_cursor.add_argument("--output", default="artifacts/cursor_trajectories.jsonl")
+    ingest_cursor.add_argument(
+        "--project",
+        action="append",
+        dest="projects",
+        help="Only ingest projects whose folder name contains this token; repeatable",
+    )
+    ingest_cursor.add_argument("--include-subagents", action="store_true")
+    ingest_cursor.add_argument("--include-empty-window", action="store_true")
+    ingest_cursor.add_argument(
+        "--include-chat",
+        action="store_true",
+        help="Keep transcripts that have no tool calls",
+    )
+    ingest_cursor.add_argument("--min-tools", type=int, default=1)
+    ingest_cursor.add_argument("--limit", type=int)
+    ingest_cursor.add_argument(
+        "--split-user-turns",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Emit one trajectory per user request (default). Use --no-split-user-turns for whole sessions.",
     )
 
     construct = commands.add_parser(
@@ -179,6 +212,19 @@ def main(argv: list[str] | None = None) -> None:
         else:
             rows = select_stratified_pilot(args.total_rows, args.seed)
             write_jsonl(rows, args.output)
+    elif args.command == "ingest-cursor":
+        rows = ingest_cursor_transcripts(
+            args.root,
+            args.output,
+            include_subagents=args.include_subagents,
+            include_empty_window=args.include_empty_window,
+            include_chat=args.include_chat,
+            split_user_turns=args.split_user_turns,
+            projects=args.projects,
+            min_tools=args.min_tools,
+            limit=args.limit,
+        )
+        print(f"wrote {len(rows)} cursor trajectories -> {args.output}", file=sys.stderr)
     elif args.command == "construct-spec":
         _construct_spec(
             args.input,

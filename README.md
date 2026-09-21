@@ -183,6 +183,37 @@ tracegraph sample \
 You can instead use an existing trajectory JSONL file as the input to
 `construct-spec` and `decompose`.
 
+To run the same pipeline on your own Cursor agent sessions, convert the local
+transcript cache (`~/.cursor/projects/*/agent-transcripts`) first:
+
+```bash
+tracegraph ingest-cursor \
+  --output artifacts/cursor_trajectories.jsonl \
+  --project agent-goal-decomp
+
+tracegraph construct-spec \
+  --input artifacts/cursor_trajectories.jsonl \
+  --output artifacts/cursor_graph_spec.json \
+  --sample-size 8 \
+  --seed 7
+
+tracegraph decompose \
+  --input artifacts/cursor_trajectories.jsonl \
+  --output artifacts/cursor_graphs.jsonl \
+  --spec artifacts/cursor_graph_spec.json
+```
+
+`ingest-cursor` writes one JSONL row per user request by default. A long
+Cursor session is split at each `<user_query>`: `problem_statement` is that
+request, and `messages` are only the following assistant turns until the next
+user message. Earlier queries are stored on `prior_user_queries`. Use
+`--no-split-user-turns` to keep each conversation as a single trajectory.
+Tool *results* are usually absent from the cache, so observations are sparse;
+spec construction and decomposition still run over tool invocations and
+assistant reasoning. Skip `--include-empty-window` and subagent transcripts
+unless you want those duplicates. Use `--include-chat` to keep turns with no
+tools.
+
 ### 2. Construct a graph spec
 
 Select a seeded calibration sample, segment each trace, and cluster its work

@@ -529,3 +529,28 @@ def test_edge_source_type_constraints() -> None:
     spec.edge_types[0].target_types = ["find"]
     errors = validate_graph_draft(fixture_trace(), tiny_draft(), spec)
     assert any("requires source types" in error for error in errors)
+
+
+def test_coerce_string_list_rejoins_character_split_criteria() -> None:
+    from tracegraph.schema import coerce_string_list, graph_spec_from_dict
+
+    split = list("Skip edits; keep analysis.")
+    split = [ch if ch != " " else "" for ch in split]
+    assert coerce_string_list(split) == ["Skip edits", "keep analysis."]
+    assert coerce_string_list("Do not count plans") == ["Do not count plans"]
+    spec = graph_spec_from_dict(
+        {
+            "spec_id": "tiny-coding",
+            "version": "1",
+            "node_types": [
+                {
+                    "name": "find",
+                    "description": "Located the site.",
+                    "exclusion_criteria": split,
+                }
+            ],
+            "edge_types": [{"name": "leads_to", "description": "enables", "is_dependency": True}],
+        }
+    )
+    assert spec.node_types[0].exclusion_criteria == ["Skip edits", "keep analysis."]
+

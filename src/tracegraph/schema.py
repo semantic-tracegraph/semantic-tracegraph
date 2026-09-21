@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 from typing import Any
@@ -189,10 +190,53 @@ def _typed_fields(cls: type, raw: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in raw.items() if key in allowed}
 
 
+def coerce_string_list(value: Any) -> list[str]:
+    """Normalize a list of strings; do not iterate a bare string as characters.
+
+    Models sometimes submit one criterion as a string, or a character-split list
+    when a JSON string leaked into an array field. Empty entries in a char-split
+    list are treated as spaces.
+    """
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                return coerce_string_list(json.loads(text))
+            except json.JSONDecodeError:
+                pass
+        return [text] if text else []
+    if isinstance(value, (list, tuple)):
+        items = list(value)
+        if (
+            len(items) >= 8
+            and all(isinstance(item, str) and len(item) <= 1 for item in items)
+        ):
+            joined = "".join(item if item else " " for item in items).strip()
+            return [part.strip() for part in joined.split(";") if part.strip()]
+        return [str(item).strip() for item in items if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
 def graph_spec_from_dict(data: dict[str, Any]) -> GraphSpec:
     payload = dict(data.get("spec") if "spec" in data and "node_types" not in data else data)
     payload["node_types"] = [
-        NodeTypeSpec(**_typed_fields(NodeTypeSpec, dict(item)))
+        NodeTypeSpec(
+            **_typed_fields(
+                NodeTypeSpec,
+                {
+                    **item,
+                    "inclusion_criteria": coerce_string_list(item.get("inclusion_criteria")),
+                    "exclusion_criteria": coerce_string_list(item.get("exclusion_criteria")),
+                    "evidence_requirements": coerce_string_list(
+                        item.get("evidence_requirements")
+                    ),
+                    "examples": coerce_string_list(item.get("examples")),
+                },
+            )
+        )
         for item in payload.get("node_types") or []
     ]
     payload["edge_types"] = [

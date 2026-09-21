@@ -10,7 +10,7 @@ from .agent_trace import agent_runtime, assistant_message, complete_chat, parse_
 from .graph_builder import coerce_json_array
 from .graph_spec import validate_graph_spec
 from .sandbox import TraceSandbox
-from .schema import GraphSpec, Trace, graph_spec_from_dict, to_dict
+from .schema import GraphSpec, Trace, coerce_string_list, graph_spec_from_dict, to_dict
 
 
 @dataclass(slots=True)
@@ -202,26 +202,14 @@ CLUSTERING_TOOLS = [
 def _parse_cluster(raw: dict[str, Any]) -> SegmentCluster:
     return SegmentCluster(
         node_type=str(raw.get("node_type") or "").strip(),
-        member_segment_ids=[
-            str(segment_id) for segment_id in raw.get("member_segment_ids") or []
-        ],
+        member_segment_ids=coerce_string_list(raw.get("member_segment_ids")),
         description=str(raw.get("description") or "").strip(),
-        similarity_basis=[
-            str(value).strip() for value in raw.get("similarity_basis") or []
-        ],
-        distinguishing_criteria=[
-            str(value).strip() for value in raw.get("distinguishing_criteria") or []
-        ],
-        inclusion_criteria=[
-            str(value).strip() for value in raw.get("inclusion_criteria") or []
-        ],
-        exclusion_criteria=[
-            str(value).strip() for value in raw.get("exclusion_criteria") or []
-        ],
-        evidence_requirements=[
-            str(value).strip() for value in raw.get("evidence_requirements") or []
-        ],
-        examples=[str(value).strip() for value in raw.get("examples") or []],
+        similarity_basis=coerce_string_list(raw.get("similarity_basis")),
+        distinguishing_criteria=coerce_string_list(raw.get("distinguishing_criteria")),
+        inclusion_criteria=coerce_string_list(raw.get("inclusion_criteria")),
+        exclusion_criteria=coerce_string_list(raw.get("exclusion_criteria")),
+        evidence_requirements=coerce_string_list(raw.get("evidence_requirements")),
+        examples=coerce_string_list(raw.get("examples")),
         singleton_justification=str(raw.get("singleton_justification") or "").strip(),
         default_weight=float(raw.get("default_weight", 1.0)),
     )
@@ -568,4 +556,5 @@ class AgentSpecConstructor:
             session_id=session_id,
             user_agent=self.user_agent,
             transport=self.transport,
+            timeout=600,
         )

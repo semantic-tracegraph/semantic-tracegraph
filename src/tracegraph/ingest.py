@@ -31,10 +31,16 @@ def classify_command(command: str) -> EventType:
 
 
 def parse_messages(row: dict[str, Any]) -> Trace:
+    from .cursor_ingest import looks_like_cursor_messages, parse_cursor_messages
+
+    messages = row.get("messages") or []
+    if row.get("source") == "cursor" or looks_like_cursor_messages(messages):
+        return parse_cursor_messages(row)
+
     events: list[TraceEvent] = []
     turn = 0
     pending_command_id: str | None = None
-    for message in row.get("messages") or []:
+    for message in messages:
         role = message.get("role")
         content = str(message.get("content") or "")
         if role == "assistant":
